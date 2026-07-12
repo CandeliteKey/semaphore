@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Cookie Clip",
+  "version": "1.0.0",
+  "description": "Send cookies for a selected site to a local Semaphore server.",
+  "permissions": [
+    "activeTab",
+    "cookies",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost:8931/*"
+  ],
+  "action": {
+    "default_title": "Cookie Clip",
+    "default_popup": "popup.html"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cookie-clip@semaphore.local",
+      "strict_min_version": "109.0"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cookie Clip</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>Cookie Clip</h1>
+
+      <label for="domain">Domain to clip</label>
+      <input id="domain" name="domain" type="text" inputmode="url"
+        autocomplete="off" spellcheck="false" placeholder="example.com">
+      <p class="hint">Confirm or adjust the detected registrable domain.</p>
+
+      <label for="secret">Semaphore shared secret</label>
+      <input id="secret" name="secret" type="password" autocomplete="off"
+        spellcheck="false" placeholder="Paste the secret from container logs">
+      <p class="hint">Stored only in this browser profile.</p>
+
+      <button id="clip" type="button">Clip cookies</button>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
