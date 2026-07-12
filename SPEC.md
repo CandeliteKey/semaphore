@@ -19,6 +19,9 @@ WSL2: Docker container "semaphore"                              ▼
   ├─ MCP tools (read-only surface, exactly two in v1):
   │    ├─ read_page({ url, format? })   format: "auto" (default) | "markdown" | "aria" | "html"
   │    │                                 auto uses Readability for article-like pages and link-preserving markdown for link-list-like pages
+  │    │                                 on a login wall returns a structured error { error: "auth_required", domain,
+  │    │                                 reason: "no_cookies" | "session_expired", action }; the caller must halt and
+  │    │                                 have the user re-clip, never retry or read the logged-out page
   │    └─ session_status({ domain? })
   ├─ Two-tier fetch:
   │    tier 1: plain HTTP GET + Cookie header + UA string matching user's Zen

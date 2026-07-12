@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { DATA_DIR } from "./config.js";
 import { loadCookieStore, normalizeDomain, type StoredDomain } from "./cookies.js";
-import { fetchPage, type PageFormat } from "./fetcher/index.js";
+import { AuthRequiredError, fetchPage, type PageFormat } from "./fetcher/index.js";
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -16,7 +16,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "read_page",
-    "Read a public or authenticated web page without performing any write action. Auto format detects articles versus link-list pages; override with markdown for pure Readability output, aria for an accessibility snapshot, or html for Readability HTML.",
+    "Read a public or authenticated web page without performing any write action. Auto format detects articles versus link-list pages; override with markdown for pure Readability output, aria for an accessibility snapshot, or html for Readability HTML. If a call returns an auth_required error, STOP and tell the user to re-clip cookies for that domain with the Cookie Clip browser extension — do not retry and do not substitute the logged-out page.",
     {
       url: z.string().url(),
       format: z.enum(["auto", "markdown", "aria", "html"]).default("auto")
@@ -28,6 +28,17 @@ function createMcpServer(): McpServer {
         const note = result.hadCookies ? "" : `[No cookies stored for domain; fetched as a public page.]\n\n`;
         return { content: [{ type: "text" as const, text: `${note}${result.text}` }] };
       } catch (error: unknown) {
+        if (error instanceof AuthRequiredError) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({
+              error: "auth_required",
+              domain: error.domain,
+              reason: error.reason,
+              action: `Re-clip cookies for ${error.domain} using the Cookie Clip browser extension, then retry.`
+            }) }],
+            isError: true
+          };
+        }
         return { content: [{ type: "text" as const, text: errorText(error) }], isError: true };
       }
     }

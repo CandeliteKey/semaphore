@@ -11,6 +11,17 @@ export class FetchFailure extends Error {
   constructor(message: string, readonly kind: "session" | "fetch") { super(message); }
 }
 
+export type AuthReason = "no_cookies" | "session_expired";
+
+// Distinct from FetchFailure: the fetch itself succeeded but landed on a login
+// wall. The caller must halt and have the user re-clip cookies — retrying or
+// reading the logged-out page is never the right recovery.
+export class AuthRequiredError extends Error {
+  constructor(readonly domain: string, readonly reason: AuthReason) {
+    super(`authentication required for ${domain} (${reason})`);
+  }
+}
+
 export interface FetchPageResult {
   text: string;
   tier: 1 | 2;
@@ -145,7 +156,7 @@ export async function fetchPage(dataDir: string, store: CookieStore, rawUrl: str
       }
     }
     const second = await tierTwo(dataDir, url, format, session, store.userAgent);
-    if (second.loginWall) throw new FetchFailure(`session expired or missing for domain ${url.hostname} — re-clip cookies from the browser extension`, "session");
+    if (second.loginWall) throw new AuthRequiredError(url.hostname, session !== undefined ? "session_expired" : "no_cookies");
     if (second.mode !== undefined && second.classification !== undefined) console.log(`read_page mode=${second.mode} tier=2 rule=${second.classification.rule} cluster_distinct=${second.classification.distinctCount} coverage=${second.classification.coverage.toFixed(2)} structural_items=${second.classification.structuralItemCount} dominance=${second.classification.dominance.toFixed(2)}`);
     return { text: second.text, tier: 2, hadCookies: session !== undefined, ...(second.mode === undefined ? {} : { mode: second.mode }) };
   });
