@@ -17,7 +17,8 @@ WSL2: Docker container "semaphore"                              ▼
   │    ├─ POST /api/cookies   ← cookie ingestion, shared-secret auth
   │    └─ ALL  /mcp           ← MCP streamable HTTP endpoint
   ├─ MCP tools (read-only surface, exactly two in v1):
-  │    ├─ read_page({ url, format? })   format: "markdown" (default) | "aria" | "html"
+  │    ├─ read_page({ url, format? })   format: "auto" (default) | "markdown" | "aria" | "html"
+  │    │                                 auto uses Readability for article-like pages and link-preserving markdown for link-list-like pages
   │    └─ session_status({ domain? })
   ├─ Two-tier fetch:
   │    tier 1: plain HTTP GET + Cookie header + UA string matching user's Zen

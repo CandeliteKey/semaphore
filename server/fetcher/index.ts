@@ -2,10 +2,10 @@ import { firefox, type BrowserContext } from "playwright";
 import path from "node:path";
 import type { CookieStore, FirefoxCookie, StoredDomain } from "../cookies.js";
 import { findStoredDomain } from "../cookies.js";
-import { extractArticle, hasLoginMarkers, isThinContent, type ExtractedArticle } from "./extract.js";
+import { classifyPageDetailed, extractArticle, extractLinkPreserving, hasLoginMarkers, isThinContent, type ClassificationDetail, type ExtractedArticle } from "./extract.js";
 import { domainRateLimiter } from "./rate-limiter.js";
 
-export type PageFormat = "markdown" | "html" | "aria";
+export type PageFormat = "auto" | "markdown" | "html" | "aria";
 
 export class FetchFailure extends Error {
   constructor(message: string, readonly kind: "session" | "fetch") { super(message); }
@@ -15,6 +15,7 @@ export interface FetchPageResult {
   text: string;
   tier: 1 | 2;
   hadCookies: boolean;
+  mode?: "article" | "links";
 }
 
 function cookieApplies(cookie: FirefoxCookie, url: URL): boolean {
@@ -30,7 +31,7 @@ function cookieHeader(cookies: FirefoxCookie[], url: URL): string | undefined {
   return value || undefined;
 }
 
-async function tierOne(url: URL, session: StoredDomain | undefined, fallbackUa: string | undefined): Promise<{ article: ExtractedArticle; authStatus: boolean }> {
+async function tierOne(url: URL, session: StoredDomain | undefined, fallbackUa: string | undefined): Promise<{ article: ExtractedArticle; html: string; finalUrl: string; authStatus: boolean }> {
   let current = url;
   for (let redirects = 0; redirects <= 10; redirects += 1) {
     const headers = new Headers();
@@ -50,7 +51,7 @@ async function tierOne(url: URL, session: StoredDomain | undefined, fallbackUa: 
     if (response.status === 401 || response.status === 403) throw new FetchFailure(`HTTP ${response.status}`, "session");
     if (!response.ok) throw new FetchFailure(`HTTP ${response.status} ${response.statusText}`, "fetch");
     const html = await response.text();
-    return { article: extractArticle(html, current.href), authStatus: /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)/i.test(current.pathname) };
+    return { article: extractArticle(html, current.href), html, finalUrl: current.href, authStatus: /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)/i.test(current.pathname) };
   }
   throw new FetchFailure("too many redirects", "fetch");
 }
@@ -84,7 +85,7 @@ function getPersistentContext(dataDir: string, userAgent: string | undefined): P
   return persistentContext;
 }
 
-async function tierTwo(dataDir: string, url: URL, format: PageFormat, session: StoredDomain | undefined, fallbackUa: string | undefined): Promise<{ text: string; loginWall: boolean }> {
+async function tierTwo(dataDir: string, url: URL, format: PageFormat, session: StoredDomain | undefined, fallbackUa: string | undefined): Promise<{ text: string; loginWall: boolean; mode?: "article" | "links"; classification?: ClassificationDetail }> {
   const context = await getPersistentContext(dataDir, fallbackUa ?? session?.userAgent);
   const page = await context.newPage();
   try {
@@ -102,8 +103,14 @@ async function tierTwo(dataDir: string, url: URL, format: PageFormat, session: S
     }
     const html = await page.content();
     const article = extractArticle(html, page.url());
+    const classification = format === "auto" ? classifyPageDetailed(html, page.url(), article) : undefined;
+    const mode = classification?.mode;
     return {
-      text: format === "html" ? article.html : article.markdown,
+      text: format === "html" ? article.html
+        : mode === "links" ? extractLinkPreserving(html, page.url()).markdown
+        : article.markdown,
+      ...(mode === undefined ? {} : { mode }),
+      ...(classification === undefined ? {} : { classification: classification.detail }),
       loginWall: hasLoginMarkers(html, article.text) || /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)/i.test(page.url())
     };
   } finally {
@@ -121,8 +128,17 @@ export async function fetchPage(dataDir: string, store: CookieStore, rawUrl: str
     if (format !== "aria") {
       try {
         const first = await tierOne(url, session === undefined ? undefined : { ...session, userAgent: store.userAgent ?? session.userAgent }, store.userAgent);
-        if (!first.authStatus && !hasLoginMarkers(first.article.html, first.article.text) && !isThinContent(first.article.text)) {
-          return { text: format === "html" ? first.article.html : first.article.markdown, tier: 1, hadCookies: session !== undefined };
+        const thin = format === "auto"
+          ? isThinContent(first.article.text) && isThinContent(extractLinkPreserving(first.html, first.finalUrl).text)
+          : isThinContent(first.article.text);
+        if (!first.authStatus && !hasLoginMarkers(first.article.html, first.article.text) && !thin) {
+          const classification = format === "auto" ? classifyPageDetailed(first.html, first.finalUrl, first.article) : undefined;
+          const mode = classification?.mode;
+          const text = format === "html" ? first.article.html
+            : mode === "links" ? extractLinkPreserving(first.html, first.finalUrl).markdown
+            : first.article.markdown;
+          if (classification !== undefined) console.log(`read_page mode=${mode} tier=1 rule=${classification.detail.rule} cluster_distinct=${classification.detail.distinctCount} coverage=${classification.detail.coverage.toFixed(2)} structural_items=${classification.detail.structuralItemCount} dominance=${classification.detail.dominance.toFixed(2)}`);
+          return { text, tier: 1, hadCookies: session !== undefined, ...(mode === undefined ? {} : { mode }) };
         }
       } catch (error: unknown) {
         if (!(error instanceof FetchFailure) || error.kind !== "session") throw error;
@@ -130,6 +146,7 @@ export async function fetchPage(dataDir: string, store: CookieStore, rawUrl: str
     }
     const second = await tierTwo(dataDir, url, format, session, store.userAgent);
     if (second.loginWall) throw new FetchFailure(`session expired or missing for domain ${url.hostname} — re-clip cookies from the browser extension`, "session");
-    return { text: second.text, tier: 2, hadCookies: session !== undefined };
+    if (second.mode !== undefined && second.classification !== undefined) console.log(`read_page mode=${second.mode} tier=2 rule=${second.classification.rule} cluster_distinct=${second.classification.distinctCount} coverage=${second.classification.coverage.toFixed(2)} structural_items=${second.classification.structuralItemCount} dominance=${second.classification.dominance.toFixed(2)}`);
+    return { text: second.text, tier: 2, hadCookies: session !== undefined, ...(second.mode === undefined ? {} : { mode: second.mode }) };
   });
 }

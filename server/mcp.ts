@@ -16,10 +16,10 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "read_page",
-    "Read a public or authenticated web page without performing any write action.",
+    "Read a public or authenticated web page without performing any write action. Auto format detects articles versus link-list pages; override with markdown for pure Readability output, aria for an accessibility snapshot, or html for Readability HTML.",
     {
       url: z.string().url(),
-      format: z.enum(["markdown", "aria", "html"]).default("markdown")
+      format: z.enum(["auto", "markdown", "aria", "html"]).default("auto")
     },
     async ({ url, format }) => {
       try {
