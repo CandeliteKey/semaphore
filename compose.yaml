@@ -1,0 +1,16 @@
+services:
+  semaphore:
+    build:
+      context: .
+    container_name: semaphore
+    restart: unless-stopped
+    environment:
+      # Bind only the container's own interface; the host publication remains loopback-only.
+      SEMAPHORE_HOST: semaphore
+    ports:
+      - "127.0.0.1:8931:8931"
+    volumes:
+      - semaphore-data:/data
+
+volumes:
+  semaphore-data:

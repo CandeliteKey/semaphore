@@ -1,0 +1,31 @@
+{
+  "name": "semaphore",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only authenticated web-fetch layer for LLM agents",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server/index.js",
+    "dev": "tsx server/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^26.1.0",
+    "playwright": "^1.52.0",
+    "turndown": "^7.2.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^22.0.0",
+    "@types/turndown": "^5.0.5",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}
