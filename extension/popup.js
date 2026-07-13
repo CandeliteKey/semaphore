@@ -54,6 +54,15 @@ function mapCookie(cookie) {
   return mapped;
 }
 
+function acceptLanguage() {
+  const languages = navigator.languages.length > 0 ? navigator.languages : [navigator.language];
+  return languages.map((language, index) => {
+    if (index === 0) return language;
+    const quality = Math.max(0.1, 1 - (index / languages.length));
+    return `${language};q=${quality.toFixed(1)}`;
+  }).join(",");
+}
+
 async function initialize() {
   try {
     const [tabs, stored] = await Promise.all([
@@ -110,6 +119,7 @@ async function clipCookies() {
       body: JSON.stringify({
         domain,
         userAgent: navigator.userAgent,
+        acceptLanguage: acceptLanguage(),
         cookies: cookies.map(mapCookie),
       }),
     });

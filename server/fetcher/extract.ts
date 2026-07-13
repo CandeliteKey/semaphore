@@ -9,6 +9,12 @@ export interface ExtractedArticle {
   title: string;
 }
 
+const CHALLENGE_MARKERS = /(?:\bjust a moment\b|cf[-_]chl|\battention required\b|\bchecking your browser\b|\bdatadome\b|px-captcha|\bperimeterx\b|\bverifying you are human\b|enable javascript and cookies to continue)/i;
+
+export function looksLikeChallenge(html: string): boolean {
+  return CHALLENGE_MARKERS.test(html);
+}
+
 const THIN_CONTENT_THRESHOLD = 240;
 const SHORT_ARTICLE_THRESHOLD = 500;
 const EXACT_CLUSTER_MIN_URLS = 8;

@@ -4,7 +4,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { CookieStore, FirefoxCookie, StoredDomain } from "../cookies.js";
 import { findStoredDomain } from "../cookies.js";
-import { classifyPageDetailed, extractArticle, extractLinkPreserving, hasLoginMarkers, isThinContent, type ClassificationDetail, type ExtractedArticle } from "./extract.js";
+import { classifyPageDetailed, extractArticle, extractLinkPreserving, hasLoginMarkers, isThinContent, looksLikeChallenge, type ClassificationDetail, type ExtractedArticle } from "./extract.js";
 import { domainRateLimiter } from "./rate-limiter.js";
 
 export type PageFormat = "auto" | "markdown" | "html" | "aria";
@@ -44,7 +44,22 @@ function cookieHeader(cookies: FirefoxCookie[], url: URL): string | undefined {
   return value || undefined;
 }
 
-async function tierOne(url: URL, session: StoredDomain | undefined, fallbackUa: string | undefined): Promise<{ article: ExtractedArticle; html: string; finalUrl: string; authStatus: boolean }> {
+export function firefoxHeaders(userAgent: string | undefined, acceptLanguage: string | undefined): Record<string, string> | undefined {
+  if (userAgent === undefined || !/Firefox\/\d/.test(userAgent)) return undefined;
+  // Sec-Fetch-* are deliberately omitted. Node's fetch (undici) forces
+  // Sec-Fetch-Mode to "cors" regardless of what we set, and a document/user
+  // navigation carrying Mode: cors is a combination no real browser emits — a
+  // contradictory set fingerprints worse than an absent one. We send only the
+  // headers undici relays verbatim (verified against an echo endpoint).
+  return {
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/png,image/svg+xml,*/*;q=0.8",
+    "accept-language": acceptLanguage ?? "en-US,en;q=0.5",
+    "upgrade-insecure-requests": "1",
+    "priority": "u=0, i"
+  };
+}
+
+async function tierOne(url: URL, session: StoredDomain | undefined, fallbackUa: string | undefined, fallbackAcceptLanguage: string | undefined): Promise<{ article: ExtractedArticle; html: string; finalUrl: string; authStatus: boolean }> {
   let current = url;
   for (let redirects = 0; redirects <= 10; redirects += 1) {
     const headers = new Headers();
@@ -52,6 +67,11 @@ async function tierOne(url: URL, session: StoredDomain | undefined, fallbackUa: 
     if (cookies) headers.set("cookie", cookies);
     const userAgent = session?.userAgent ?? fallbackUa;
     if (userAgent) headers.set("user-agent", userAgent);
+    const acceptLanguage = session?.acceptLanguage ?? fallbackAcceptLanguage;
+    const coherentHeaders = firefoxHeaders(userAgent, acceptLanguage);
+    if (coherentHeaders) {
+      for (const [name, value] of Object.entries(coherentHeaders)) headers.set(name, value);
+    }
     const response = await fetch(current, { method: "GET", headers, redirect: "manual" });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
@@ -87,10 +107,12 @@ function toPlaywrightCookie(cookie: FirefoxCookie): AddCookieParam {
 
 let persistentContext: Promise<BrowserContext> | undefined;
 
-function getPersistentContext(dataDir: string, userAgent: string | undefined): Promise<BrowserContext> {
+function getPersistentContext(dataDir: string, userAgent: string | undefined, acceptLanguage: string | undefined): Promise<BrowserContext> {
+  const locale = acceptLanguage?.split(",", 1)[0]?.trim();
   persistentContext ??= firefox.launchPersistentContext(path.join(dataDir, "profile"), {
     headless: true,
-    ...(userAgent === undefined ? {} : { userAgent })
+    ...(userAgent === undefined ? {} : { userAgent }),
+    ...(locale ? { locale } : {})
   }).catch((error: unknown) => {
     persistentContext = undefined;
     throw error;
@@ -98,23 +120,24 @@ function getPersistentContext(dataDir: string, userAgent: string | undefined): P
   return persistentContext;
 }
 
-async function tierTwo(dataDir: string, url: URL, format: PageFormat, session: StoredDomain | undefined, fallbackUa: string | undefined): Promise<{ text: string; loginWall: boolean; mode?: "article" | "links"; classification?: ClassificationDetail }> {
-  const context = await getPersistentContext(dataDir, fallbackUa ?? session?.userAgent);
+async function tierTwo(dataDir: string, url: URL, format: PageFormat, session: StoredDomain | undefined, fallbackUa: string | undefined, fallbackAcceptLanguage: string | undefined): Promise<{ text: string; loginWall: boolean; mode?: "article" | "links"; classification?: ClassificationDetail }> {
+  const context = await getPersistentContext(dataDir, fallbackUa ?? session?.userAgent, fallbackAcceptLanguage ?? session?.acceptLanguage);
   const page = await context.newPage();
   try {
     if (session) await context.addCookies(session.cookies.map(toPlaywrightCookie));
     const userAgent = fallbackUa ?? session?.userAgent;
     if (userAgent) await page.setExtraHTTPHeaders({ "user-agent": userAgent });
     const response = await page.goto(url.href, { waitUntil: "domcontentloaded" });
-    if (response?.status() === 401 || response?.status() === 403) return { text: "", loginWall: true };
+    const authStatus = response?.status() === 401 || response?.status() === 403;
     await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
+    const html = await page.content();
+    if (looksLikeChallenge(html)) throw new FetchFailure(`blocked by an anti-bot challenge that needs an interactive browser (${url.hostname})`, "fetch");
+    if (authStatus) return { text: "", loginWall: true };
     if (format === "aria") {
       const aria = await page.locator("html").ariaSnapshot();
-      const html = await page.content();
       const article = extractArticle(html, page.url());
       return { text: aria, loginWall: hasLoginMarkers(html, article.text) || /\/(?:login|signin|sign-in|auth)(?:[/?#]|$)/i.test(page.url()) };
     }
-    const html = await page.content();
     const article = extractArticle(html, page.url());
     const classification = format === "auto" ? classifyPageDetailed(html, page.url(), article) : undefined;
     const mode = classification?.mode;
@@ -165,11 +188,16 @@ export async function fetchPage(dataDir: string, store: CookieStore, rawUrl: str
   return domainRateLimiter.run(url.hostname, async () => {
     if (format !== "aria") {
       try {
-        const first = await tierOne(url, session === undefined ? undefined : { ...session, userAgent: store.userAgent ?? session.userAgent }, store.userAgent);
+        const normalizedSession = session === undefined ? undefined : {
+          ...session,
+          userAgent: store.userAgent ?? session.userAgent,
+          acceptLanguage: store.acceptLanguage ?? session.acceptLanguage
+        };
+        const first = await tierOne(url, normalizedSession, store.userAgent, store.acceptLanguage);
         const thin = format === "auto"
           ? isThinContent(first.article.text) && isThinContent(extractLinkPreserving(first.html, first.finalUrl).text)
           : isThinContent(first.article.text);
-        if (!first.authStatus && !hasLoginMarkers(first.article.html, first.article.text) && !thin) {
+        if (!first.authStatus && !hasLoginMarkers(first.article.html, first.article.text) && !thin && !looksLikeChallenge(first.html)) {
           const classification = format === "auto" ? classifyPageDetailed(first.html, first.finalUrl, first.article) : undefined;
           const mode = classification?.mode;
           const text = format === "html" ? first.article.html
@@ -182,7 +210,11 @@ export async function fetchPage(dataDir: string, store: CookieStore, rawUrl: str
         if (!(error instanceof FetchFailure) || error.kind !== "session") throw error;
       }
     }
-    const second = await tierTwo(dataDir, url, format, session, store.userAgent);
+    const second = await tierTwo(dataDir, url, format, session === undefined ? undefined : {
+      ...session,
+      userAgent: store.userAgent ?? session.userAgent,
+      acceptLanguage: store.acceptLanguage ?? session.acceptLanguage
+    }, store.userAgent, store.acceptLanguage);
     if (second.loginWall) throw new AuthRequiredError(url.hostname, session !== undefined ? "session_expired" : "no_cookies");
     if (second.mode !== undefined && second.classification !== undefined) console.log(`read_page mode=${second.mode} tier=2 rule=${second.classification.rule} cluster_distinct=${second.classification.distinctCount} coverage=${second.classification.coverage.toFixed(2)} structural_items=${second.classification.structuralItemCount} dominance=${second.classification.dominance.toFixed(2)}`);
     return { text: second.text, tier: 2, hadCookies: session !== undefined, ...(second.mode === undefined ? {} : { mode: second.mode }) };

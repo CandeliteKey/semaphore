@@ -33,6 +33,13 @@ WSL2: Docker container "semaphore"                              ▼
   └─ Rate limiter: per-domain serial queue, min interval ~5s + jitter
 ```
 
+Tier 1 sends the Firefox headers undici relays verbatim (Accept, Accept-Language
+from the clip, Upgrade-Insecure-Requests, Priority). Sec-Fetch-* are omitted:
+undici forces Sec-Fetch-Mode to "cors", which would contradict a document
+navigation, and a contradictory set fingerprints worse than none. Anti-bot
+challenge pages automatically escalate to tier 2's real Firefox; tier 1 cannot
+match browser TLS/JA3 (or Sec-Fetch-Mode) by design.
+
 ## Components
 
 - `server/` — TypeScript (strict), Node 22. Minimal deps:

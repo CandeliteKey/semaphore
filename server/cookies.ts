@@ -16,6 +16,7 @@ export const firefoxCookieSchema = z.object({
 export const cookiePayloadSchema = z.object({
   domain: z.string().min(1),
   userAgent: z.string().min(1).optional(),
+  acceptLanguage: z.string().min(1).optional(),
   cookies: z.array(firefoxCookieSchema)
 });
 
@@ -26,11 +27,13 @@ export interface StoredDomain {
   cookies: FirefoxCookie[];
   updatedAt: string;
   userAgent?: string;
+  acceptLanguage?: string;
 }
 
 export interface CookieStore {
   version: 1;
   userAgent?: string;
+  acceptLanguage?: string;
   domains: Record<string, StoredDomain>;
 }
 
@@ -51,10 +54,12 @@ export async function loadCookieStore(dataDir: string): Promise<CookieStore> {
     const schema = z.object({
       version: z.literal(1),
       userAgent: z.string().optional(),
+      acceptLanguage: z.string().optional(),
       domains: z.record(z.object({
         cookies: z.array(firefoxCookieSchema),
         updatedAt: z.string(),
-        userAgent: z.string().optional()
+        userAgent: z.string().optional(),
+        acceptLanguage: z.string().optional()
       }))
     });
     return schema.parse(parsed);
@@ -73,12 +78,15 @@ export async function storeCookiePayload(dataDir: string, rawPayload: unknown): 
     const store = await loadCookieStore(dataDir);
     const previous = store.domains[domain];
     const userAgent = payload.userAgent ?? previous?.userAgent ?? store.userAgent;
+    const acceptLanguage = payload.acceptLanguage ?? previous?.acceptLanguage ?? store.acceptLanguage;
     store.domains[domain] = {
       cookies: payload.cookies,
       updatedAt: new Date().toISOString(),
-      ...(userAgent === undefined ? {} : { userAgent })
+      ...(userAgent === undefined ? {} : { userAgent }),
+      ...(acceptLanguage === undefined ? {} : { acceptLanguage })
     };
     if (payload.userAgent !== undefined) store.userAgent = payload.userAgent;
+    if (payload.acceptLanguage !== undefined) store.acceptLanguage = payload.acceptLanguage;
 
     const destination = path.join(dataDir, "cookies.json");
     const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`;
