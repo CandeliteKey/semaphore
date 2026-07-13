@@ -19,6 +19,11 @@ function isAuthorized(candidate: string | undefined, secret: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+function providedSecret(request: IncomingMessage): string | undefined {
+  const header = request.headers["x-semaphore-secret"];
+  return Array.isArray(header) ? header[0] : header;
+}
+
 async function readJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -43,15 +48,17 @@ const server = createServer(async (request, response) => {
         response.setHeader("allow", "POST");
         return json(response, 405, { error: "method_not_allowed" });
       }
-      const header = request.headers["x-semaphore-secret"];
-      const candidate = Array.isArray(header) ? header[0] : header;
-      if (!isAuthorized(candidate, secret)) return json(response, 401, { error: "unauthorized" });
+      if (!isAuthorized(providedSecret(request), secret)) return json(response, 401, { error: "unauthorized" });
       const payload = await readJson(request);
       const stored = await storeCookiePayload(DATA_DIR, payload);
       return json(response, 202, { ok: true, domain: stored.domain, cookieCount: stored.cookies.length });
     }
 
     if (pathname === "/mcp") {
+      // Gate the tool surface too: once /mcp is reachable beyond loopback (e.g.
+      // proxied onto a tailnet), an unauthenticated caller could ride the stored
+      // sessions. The secret is defense-in-depth so bind/ACL is not the only guard.
+      if (!isAuthorized(providedSecret(request), secret)) return json(response, 401, { error: "unauthorized" });
       const body = request.method === "POST" ? await readJson(request) : undefined;
       await handleMcpRequest(request, response, body);
       return;

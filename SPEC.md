@@ -15,7 +15,7 @@ Windows Zen (Firefox) ──(extension "Cookie Clip")──POST──▶ localho
 WSL2: Docker container "semaphore"                              ▼
   ├─ HTTP server, bound 127.0.0.1:8931 (compose publishes 127.0.0.1:8931:8931)
   │    ├─ POST /api/cookies   ← cookie ingestion, shared-secret auth
-  │    └─ ALL  /mcp           ← MCP streamable HTTP endpoint
+  │    └─ ALL  /mcp           ← MCP streamable HTTP endpoint, shared-secret auth
   ├─ MCP tools (read-only surface, exactly two in v1):
   │    ├─ read_page({ url, format? })   format: "auto" (default) | "markdown" | "aria" | "html"
   │    │                                 auto uses Readability for article-like pages and link-preserving markdown for link-list-like pages
@@ -49,13 +49,19 @@ WSL2: Docker container "semaphore"                              ▼
 
 ## Security constraints (non-negotiable)
 
-- Bind `127.0.0.1` only. Never `0.0.0.0`.
-- `POST /api/cookies` requires header `X-Semaphore-Secret`; secret generated at
-  first boot, stored under `/data`, surfaced in container logs for the user to
-  copy into the extension settings.
-- Cookies are the only stored credential material. No passwords anywhere.
+- Bind `127.0.0.1` only. Never `0.0.0.0`. To reach it from a tailnet, front the
+  `/mcp` path with `tailscale serve` (HTTPS, tailnet-only) rather than rebinding;
+  keep `/api/cookies` unexposed so cookie writes stay loopback-only.
+- Both `POST /api/cookies` and `/mcp` require header `X-Semaphore-Secret`; secret
+  generated at first boot, stored under `/data`, surfaced in container logs. The
+  extension and any MCP client must send it. `/mcp` auth is defense-in-depth so
+  that bind/ACL is not the only thing standing between a caller and the sessions.
+- Cookies are the only stored credential material. No passwords anywhere. No tool
+  returns raw cookie values — `session_status` reports counts/expiry only.
 - MCP surface is read-only: no tool may navigate via form submission, click, or
   any non-GET action.
+- SSRF guard: `read_page` refuses URLs resolving to loopback / private / link-local
+  addresses, so it cannot be used as a pivot into the host's internal network.
 
 ## Build order (chunks)
 

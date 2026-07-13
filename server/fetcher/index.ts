@@ -1,5 +1,7 @@
 import { firefox, type BrowserContext } from "playwright";
 import path from "node:path";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import type { CookieStore, FirefoxCookie, StoredDomain } from "../cookies.js";
 import { findStoredDomain } from "../cookies.js";
 import { classifyPageDetailed, extractArticle, extractLinkPreserving, hasLoginMarkers, isThinContent, type ClassificationDetail, type ExtractedArticle } from "./extract.js";
@@ -129,9 +131,34 @@ async function tierTwo(dataDir: string, url: URL, format: PageFormat, session: S
   }
 }
 
+function isPrivateAddress(ip: string): boolean {
+  const low = ip.toLowerCase();
+  const mapped = low.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped?.[1]) return isPrivateAddress(mapped[1]);
+  if (low === "::1" || low.startsWith("fe80:") || low.startsWith("fc") || low.startsWith("fd")) return true;
+  if (low.startsWith("127.") || low.startsWith("10.") || low.startsWith("169.254.") || low.startsWith("192.168.") || low.startsWith("0.")) return true;
+  const twelve = low.match(/^172\.(\d+)\./);
+  return twelve?.[1] !== undefined && Number(twelve[1]) >= 16 && Number(twelve[1]) <= 31;
+}
+
+// SSRF guard: once /mcp is reachable beyond this host, read_page must not become
+// a pivot into loopback / private / link-local networks. Rejects if ANY resolved
+// address is private (defeats split-horizon rebinding to a public+private pair).
+// Known gap: TOCTOU between this lookup and the actual fetch (DNS rebinding).
+async function assertPublicUrl(url: URL): Promise<void> {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost")) throw new FetchFailure("refusing to fetch a loopback address", "fetch");
+  const addresses = isIP(host) ? [host] : (await lookup(host, { all: true })).map((entry) => entry.address);
+  if (addresses.length === 0) throw new FetchFailure(`could not resolve ${host}`, "fetch");
+  for (const address of addresses) {
+    if (isPrivateAddress(address)) throw new FetchFailure(`refusing to fetch a private or loopback address (${host})`, "fetch");
+  }
+}
+
 export async function fetchPage(dataDir: string, store: CookieStore, rawUrl: string, format: PageFormat): Promise<FetchPageResult> {
   const url = new URL(rawUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new FetchFailure("only http and https URLs are supported", "fetch");
+  await assertPublicUrl(url);
   const match = findStoredDomain(store, url.hostname);
   const session = match?.[1];
 
