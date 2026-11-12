@@ -1,0 +1,6 @@
+{
+  "status": "idle",
+  "stacks": ["typescript", "docker"],
+  "features": ["MCP", "agent", "browsing", "authenticated-requests"],
+  "description": "A small headless browsing tool to browse authenticated webpages via cookie copying from the user browser"
+}
